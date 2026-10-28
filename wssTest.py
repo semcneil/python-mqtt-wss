@@ -1,4 +1,15 @@
+"""
+wssTest.py
+----------
+This is a test script for sending and receiving MQTT messages
+over a secure websockets (WSS) connection.
+
+| Seth McNeill
+| 2026 October 28
+"""
+
 import time
+from datetime import datetime
 import ssl
 import paho.mqtt.client as mqtt
 import os
@@ -18,6 +29,10 @@ MQTT_TOPIC = os.getenv('MQTT_TOPIC')
 # --- AUTHENTICATION ---
 MQTT_USER = os.getenv('MQTT_USER')
 MQTT_PASS = os.getenv('MQTT_PASS')
+
+# --- ID ---
+MOD_NAME = os.getenv('MOD_NAME')
+
 
 # --- CALLBACKS ---
 def on_connect(client, userdata, flags, rc, properties=None):
@@ -76,6 +91,9 @@ def main():
     
     try:
         client.connect(MQTT_HOST, MQTT_PORT, keepalive=60)
+    except KeyboardInterrupt:
+        print("User interrupted")
+        return
     except Exception as e:
         print(f"[ERROR]   Failed to initiate network connection: {e}")
         return
@@ -87,7 +105,7 @@ def main():
     time.sleep(2)
 
     # Publish a test message
-    test_payload = "Hello via authenticated Port 443 WebSockets from Python!"
+    test_payload = f'{{"name":"{MOD_NAME}", "time":{datetime.now()} }}'
     print(f"[STATUS]  Publishing message: '{test_payload}'")
     client.publish(MQTT_TOPIC, test_payload, qos=1)
 
