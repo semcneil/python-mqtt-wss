@@ -105,7 +105,7 @@ def main():
     time.sleep(2)
 
     # Publish a test message
-    test_payload = f'{{"name":"{MOD_NAME}", "time":{datetime.now()} }}'
+    test_payload = f'{{"name":"{MOD_NAME}", "time":"{datetime.now()}"}}'
     print(f"[STATUS]  Publishing message: '{test_payload}'")
     client.publish(MQTT_TOPIC, test_payload, qos=1)
 
