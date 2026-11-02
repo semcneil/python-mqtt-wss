@@ -1,0 +1,174 @@
+"""
+macLoginLog.py
+----------
+This script sends an MQTT message over WSS when the Mac it is running 
+on is unlocked
+
+| Seth McNeill
+| 2026 November 02
+"""
+
+import time
+import subprocess
+from datetime import datetime
+import ssl
+import paho.mqtt.client as mqtt
+import os
+from dotenv import load_dotenv
+import logging
+
+# load the environmental variables
+load_dotenv(".env")
+
+# --- CONFIGURATION ---
+MQTT_HOST = os.getenv('MQTT_HOST')
+MQTT_PORT = int(os.getenv('MQTT_PORT'))
+MQTT_PATH = os.getenv('MQTT_PATH') 
+# MQTT_TOPIC = "test/websocket/channel"
+MQTT_TOPIC = os.getenv('MQTT_TOPIC')
+
+# --- AUTHENTICATION ---
+MQTT_USER = os.getenv('MQTT_USER')
+MQTT_PASS = os.getenv('MQTT_PASS')
+
+# --- ID ---
+MOD_NAME = os.getenv('MOD_NAME')
+
+def monitor_unlocks():
+    # Command to stream live unified log messages related to session state
+    cmd = [
+        "log", "stream",
+        "--predicate", 'eventMessage contains "com.apple.sessionagent.screenIsUnlocked"',
+        "--style", "syslog"
+    ]
+    
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    
+    print("Monitoring Mac unlock events...")
+    try:
+        while True:
+            line = process.stdout.readline()
+            if not line:
+                continue
+            if "screenIsUnlocked" in line:
+                timestamp = line.split()[0] + " " + line.split()[1]
+                print(f"[ALERT] Mac was unlocked at: {timestamp}")
+                # Add your custom notification or action here
+                # e.g., trigger a sound, send a webhook, or log to a file
+    except KeyboardInterrupt:
+        process.terminate()
+
+# --- CALLBACKS ---
+def on_connect(client, userdata, flags, rc, properties=None):
+    """Triggered when the client connects to the broker."""
+    if rc == 0:
+        print(f"[SUCCESS] Connected to {MQTT_HOST} on port {MQTT_PORT}")
+        print(f"[STATUS]  Subscribing to topic: {MQTT_TOPIC}...")
+        client.subscribe(MQTT_TOPIC)
+    else:
+        print(f"[ERROR]   Connection failed with status code: {rc}")
+        if rc == 5:
+            print("[ERROR]   Check your username or password credentials.")
+
+def on_message(client, userdata, msg):
+    """Triggered when a message is received from a subscribed topic."""
+    print("\n--- NEW MESSAGE RECEIVED ---")
+    print(f"Topic:   {msg.topic}")
+    print(f"Payload: {msg.payload.decode()}")
+    print("----------------------------\n")
+
+def on_publish(client, userdata, mid, reason_code=None, properties=None):
+    """Triggered when a message is successfully published."""
+    print("[SUCCESS] Message successfully sent to the broker.")
+
+# --- MAIN EXECUTION ---
+def main():
+    # Initialize client with WebSockets transport layer
+    client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2, transport="websockets")  
+    logging.basicConfig(level=logging.DEBUG)
+    client.enable_logger()    
+
+    # Configure credentials 
+    client.username_pw_set(username=MQTT_USER, password=MQTT_PASS)
+    
+    # Configure WebSocket path
+    client.ws_set_options(
+          path=MQTT_PATH
+    )
+#    client.ws_set_options(
+#          path=MQTT_PATH,
+#	  headers={
+#            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+#            "Accept-Language": "en-US,en;q=0.9"
+#        }
+#    )
+    
+    # Configure TLS/SSL for secure 'wss' connection
+    client.tls_set(cert_reqs=ssl.CERT_REQUIRED)
+
+    # Assign event callbacks
+    client.on_connect = on_connect
+    client.on_message = on_message
+    client.on_publish = on_publish
+
+    print(f"[STATUS]  Initiating connection to wss://{MQTT_HOST}:{MQTT_PORT}{MQTT_PATH}...")
+    
+    try:
+        client.connect(MQTT_HOST, MQTT_PORT, keepalive=60)
+    except KeyboardInterrupt:
+        print("User interrupted")
+        return
+    except Exception as e:
+        print(f"[ERROR]   Failed to initiate network connection: {e}")
+        return
+
+    # Start the network loop in the background
+    client.loop_start()
+
+    # Wait briefly for the connection and subscription to establish
+    time.sleep(2)
+
+    # Publish a test message
+    test_payload = f'{{"name":"{MOD_NAME}", "time":"{datetime.now()}"}}'
+    print(f"[STATUS]  Publishing message: '{test_payload}'")
+    client.publish(MQTT_TOPIC, test_payload, qos=1)
+
+    # Watch for unlock
+    cmd = [
+        "log", "stream",
+        "--predicate", 'eventMessage contains "com.apple.sessionagent.screenIsUnlocked"',
+        "--style", "syslog"
+    ]
+    
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    
+
+    # Keep the script alive to receive the message back
+    try:
+        print("[STATUS]  Listening for incoming echo messages. Press Ctrl+C to stop.")
+        while True:
+            # check log for unlock
+            line = process.stdout.readline()
+            if not line:
+                continue
+            if "screenIsUnlocked" in line:
+                timestamp = line.split()[0] + " " + line.split()[1]
+                if "Filtering" in timestamp:
+                    continue
+                print(f"[ALERT] Mac was unlocked at: {timestamp}")
+                test_payload = f'{{"name":"{MOD_NAME}", "Unlocked":1, "time":"{timestamp}"}}'
+                print(f"[STATUS]  Publishing message: '{test_payload}'")
+                client.publish(MQTT_TOPIC, test_payload, qos=1)
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\n[STATUS]  Stopping script...")
+    finally:
+        client.loop_stop()
+        client.disconnect()
+        process.terminate()
+        print("[STATUS]  Disconnected cleanly.")
+
+if __name__ == "__main__":
+    main()
+    # monitor_unlocks()
+
